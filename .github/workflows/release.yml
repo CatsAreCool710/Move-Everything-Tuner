@@ -30,6 +30,7 @@ jobs:
 
       - name: Build with Docker
         run: |
+          chmod +x scripts/build.sh scripts/install.sh
           docker build -t tuner-builder -f scripts/Dockerfile .
           docker run --rm -v "$PWD:/build" -w /build tuner-builder ./scripts/build.sh
 
