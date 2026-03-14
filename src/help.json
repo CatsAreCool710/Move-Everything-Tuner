@@ -1,0 +1,311 @@
+{
+    "title": "Tuner",
+    "children": [
+        {
+            "title": "Overview",
+            "lines": [
+                "Chromatic and instrument tuner with",
+                "auditory step guide feedback for",
+                "accessibility.",
+                "",
+                "Detects pitch from mic or line-in.",
+                "Three feedback modes: Step Guide",
+                "(musical intervals), Reference Tone",
+                "(pitch pipe), or Off (silent).",
+                "",
+                "22 instrument presets organized into",
+                "categories, navigable with jog wheel."
+            ]
+        },
+        {
+            "title": "Quick Start",
+            "lines": [
+                "1. Open Tuner from the Tools menu.",
+                "2. Use Up/Down arrows to select the",
+                "   note you want to tune to.",
+                "3. Play your instrument.",
+                "4. Listen for the step guide figure.",
+                "5. Turn jog to change preset within",
+                "   the current category.",
+                "6. Hold Shift+turn jog to jump",
+                "   between categories.",
+                "7. Press Menu for settings."
+            ]
+        },
+        {
+            "title": "Controls",
+            "children": [
+                {
+                    "title": "Main View",
+                    "lines": [
+                        "Up/Down: Select note (chromatic)",
+                        "  or string (instrument mode)",
+                        "Left/Right: Change octave",
+                        "  (chromatic mode only)",
+                        "Jog turn: Cycle presets within",
+                        "  current category",
+                        "Shift+Jog turn: Jump between",
+                        "  categories",
+                        "Jog click: Announce tuning state",
+                        "Shift+Jog click: Cycle feedback",
+                        "  mode (Step Guide / Reference / Off)",
+                        "Shift+Back: Toggle autospeak",
+                        "Menu: Open settings",
+                        "Back: Exit tuner"
+                    ]
+                },
+                {
+                    "title": "Knob Mapping",
+                    "lines": [
+                        "Knob 1: Feedback volume",
+                        "Knob 2: Passthrough volume",
+                        "Knob 3: A4 reference frequency",
+                        "Knob 4: Noise gate threshold",
+                        "Knob 5: Tune threshold (cents)"
+                    ]
+                },
+                {
+                    "title": "Settings Menu",
+                    "lines": [
+                        "Jog turn: Navigate items",
+                        "Jog click: Edit selected item",
+                        "Left/Right: Quick adjust values",
+                        "Back: Return to tuner view"
+                    ]
+                }
+            ]
+        },
+        {
+            "title": "Categories",
+            "lines": [
+                "Instrument presets are organized into",
+                "categories for quick navigation.",
+                "",
+                "Shift+Jog turn jumps between category",
+                "boundaries. Jog turn (without Shift)",
+                "cycles through presets within the",
+                "current category.",
+                "",
+                "Categories:",
+                "  Chromatic, Guitar, 12-String, Bass,",
+                "  Ukulele, Lap Steel, Bowed, Other"
+            ]
+        },
+        {
+            "title": "Step Guide",
+            "lines": [
+                "Plays a musical figure showing which",
+                "direction to tune using intervals.",
+                "",
+                "Sharp (too high): descending figure",
+                "  plays from above down to target.",
+                "Flat (too low): ascending figure",
+                "  plays from below up to target.",
+                "",
+                "Far off: whole step interval",
+                "Close: half step interval",
+                "In tune: steady target note",
+                "",
+                "The figure plays ONCE after your",
+                "note dies down, then waits for",
+                "you to play again.",
+                "",
+                "Tone Length and Tone Gap are",
+                "configurable in the Settings menu.",
+                "Default: 200ms tone, 40ms gap.",
+                "",
+                "Example tuning to C, string sharp:",
+                "  D -> C (descending, go lower)",
+                "Example tuning to C, string flat:",
+                "  Bb -> C (ascending, go higher)"
+            ]
+        },
+        {
+            "title": "Reference Tone",
+            "lines": [
+                "Plays a tone at the target note.",
+                "Works like a pitch pipe - select a",
+                "note and hear it. No audio input",
+                "needed.",
+                "",
+                "Three styles (set in Settings menu):",
+                "  Sine: continuous pure tone",
+                "  Pluck: plucked string sound that",
+                "    decays and re-triggers every 2s",
+                "  Soft Pluck: gentler pizzicato with",
+                "    longer sustain (bowed instruments)",
+                "",
+                "Each instrument auto-selects its best",
+                "style: pluck for guitar/bass/banjo/uke,",
+                "soft pluck for violin/viola/cello,",
+                "sine for chromatic. Toggle Auto Ref",
+                "Style off to keep your manual choice.",
+                "",
+                "Use arrow buttons to select the note",
+                "then listen and tune by ear.",
+                "",
+                "The tone re-triggers when you change",
+                "the target note or instrument."
+            ]
+        },
+        {
+            "title": "Note Selection",
+            "lines": [
+                "By default, you manually select the",
+                "target note with the arrow buttons.",
+                "",
+                "Chromatic mode:",
+                "  Up/Down = step by semitone",
+                "  Left/Right = jump by octave",
+                "",
+                "Instrument mode:",
+                "  Up/Down = cycle through strings",
+                "",
+                "Enable Auto Detect in settings to",
+                "let the tuner find the nearest note",
+                "automatically (chromatic) or nearest",
+                "string (instrument mode)."
+            ]
+        },
+        {
+            "title": "Autospeak",
+            "lines": [
+                "When enabled, the tuner announces",
+                "note names and tuning status via",
+                "the screen reader.",
+                "",
+                "Toggle with Shift+Back.",
+                "",
+                "Announces:",
+                "- Note name when first detected",
+                "- Cents offset (e.g. '5 cents sharp')",
+                "- 'In tune' confirmation",
+                "",
+                "Announcements are debounced to avoid",
+                "being intrusive during fine tuning."
+            ]
+        },
+        {
+            "title": "Instrument Modes",
+            "lines": [
+                "22 presets grouped by category:",
+                "",
+                "Chromatic:",
+                "  Chromatic: any note (manual select)",
+                "",
+                "Guitar:",
+                "  Standard: E A D G B E",
+                "  Half Step Down: D# G# C# F# A# D#",
+                "  D Standard: D G C F A D",
+                "  Drop D: D A D G B E",
+                "  Drop DG: D G D G B E",
+                "  Open D: D A D F# A D",
+                "  Open G: D G D G B D",
+                "  DADGAD: D A D G A D",
+                "  Nick Drake: C G C F C E",
+                "",
+                "12-String:",
+                "  Standard: E A D G B E (doubled)",
+                "  D Standard: D G C F A D (doubled)",
+                "",
+                "Bass:",
+                "  4-String: E A D G",
+                "  5-String: B E A D G",
+                "",
+                "Ukulele:",
+                "  Standard: G C E A",
+                "  Half Step Down: F# B D# G#",
+                "",
+                "Lap Steel:",
+                "  C6: C E G A C E",
+                "",
+                "Bowed:",
+                "  Violin: G D A E",
+                "  Viola: C G D A",
+                "  Cello: C G D A",
+                "",
+                "Other:",
+                "  Mandolin: G D A E",
+                "  Banjo: G D G B D"
+            ]
+        },
+        {
+            "title": "Settings",
+            "children": [
+                {
+                    "title": "A4 Reference",
+                    "lines": [
+                        "Sets the reference frequency for A4.",
+                        "Default: 440 Hz (concert pitch).",
+                        "Range: 410-480 Hz.",
+                        "",
+                        "Common values:",
+                        "  432 Hz: Alternative tuning",
+                        "  440 Hz: Standard concert pitch",
+                        "  442 Hz: European orchestras"
+                    ]
+                },
+                {
+                    "title": "Auto Detect",
+                    "lines": [
+                        "Off (default): You select the target",
+                        "  note manually with arrow buttons.",
+                        "On: The tuner detects the nearest",
+                        "  note (chromatic) or nearest string",
+                        "  (instrument mode) automatically."
+                    ]
+                },
+                {
+                    "title": "Passthrough",
+                    "lines": [
+                        "When on, passes the input audio",
+                        "(mic/line-in) through to the output",
+                        "mixed with the feedback tones.",
+                        "",
+                        "Useful when tuning with headphones."
+                    ]
+                },
+                {
+                    "title": "Threshold",
+                    "lines": [
+                        "How close (in cents) you need to be",
+                        "for the tuner to show 'in tune'.",
+                        "Default: 3 cents. Range: 1-10 cents.",
+                        "",
+                        "Lower = stricter, higher = lenient."
+                    ]
+                },
+                {
+                    "title": "Guide Octave",
+                    "lines": [
+                        "Controls the octave of guide tones.",
+                        "",
+                        "Auto: Shifts notes up by whole",
+                        "  octaves, preserving relative",
+                        "  intervals. Ensures all strings",
+                        "  are audible on the Move speaker.",
+                        "Match: Plays in the same octave as",
+                        "  the note being tuned."
+                    ]
+                }
+            ]
+        },
+        {
+            "title": "Audio Input",
+            "lines": [
+                "The tuner uses whatever audio input",
+                "is currently selected on your Move.",
+                "",
+                "To switch between mic and line-in,",
+                "plug in or remove a cable from the",
+                "line-in jack (auto-detected).",
+                "",
+                "Tip: For guitar, use a cable into",
+                "the line-in jack for best results.",
+                "The built-in mic works too but is",
+                "more susceptible to background noise.",
+                "Adjust the Noise Gate if needed."
+            ]
+        }
+    ]
+}

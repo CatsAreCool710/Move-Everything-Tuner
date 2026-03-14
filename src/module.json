@@ -1,0 +1,45 @@
+{
+    "id": "tuner",
+    "name": "Tuner",
+    "version": "0.1.0",
+    "description": "Chromatic and instrument tuner with step guide feedback for accessibility",
+    "author": "Jeremiah Ticket",
+    "license": "GPL-3.0-or-later",
+    "ui": "ui.js",
+    "dsp": "dsp.so",
+    "api_version": 2,
+    "component_type": "tool",
+    "tool_config": {
+        "interactive": true,
+        "skip_file_browser": true
+    },
+    "capabilities": {
+        "audio_in": true,
+        "audio_out": true,
+        "ui_hierarchy": {
+            "levels": {
+                "root": {
+                    "name": "Tuner",
+                    "params": [
+                        {"key": "feedback_mode", "label": "Feedback"},
+                        {"key": "auto_detect", "label": "Auto Detect"},
+                        {"key": "autospeak", "label": "Autospeak"},
+                        {"key": "a4_ref", "label": "A4 Ref"},
+                        {"key": "guide_octave", "label": "Guide Oct"},
+                        {"key": "ref_style", "label": "Ref Style"},
+                        {"key": "ref_style_auto", "label": "Auto Ref Style"},
+                        {"key": "guide_tone_ms", "label": "Tone Length"},
+                        {"key": "guide_gap_ms", "label": "Tone Gap"},
+                        {"key": "ref_mute_input", "label": "Ref Mutes Input"},
+                        {"key": "passthrough", "label": "Passthru"},
+                        {"key": "feedback_volume", "label": "Fb Vol"},
+                        {"key": "passthrough_volume", "label": "PT Vol"},
+                        {"key": "tune_threshold", "label": "Threshold"},
+                        {"key": "noise_gate", "label": "Gate"}
+                    ],
+                    "knobs": ["feedback_volume", "passthrough_volume", "a4_ref", "noise_gate", "tune_threshold"]
+                }
+            }
+        }
+    }
+}
