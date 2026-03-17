@@ -44,11 +44,8 @@
 /* YIN threshold for periodic signal detection (lower = stricter) */
 #define TUNER_YIN_THRESHOLD 0.15f
 
-/* Note name table */
-static const char *TUNER_NOTE_NAMES[] = {
-    "C", "C#", "D", "D#", "E", "F",
-    "F#", "G", "G#", "A", "A#", "B"
-};
+/* Note name table (extern to avoid duplication across translation units) */
+extern const char *TUNER_NOTE_NAMES[];
 
 /* Detection result */
 typedef struct {

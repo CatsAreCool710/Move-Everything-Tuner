@@ -1,14 +1,14 @@
 # Move Everything Tuner
 
-Chromatic and instrument tuner module for the [Move Everything](https://github.com/charlesvestal/move-everything) framework on Ableton Move hardware. Accessibility-first design with screen reader integration and auditory feedback.
+Instrument tuner module for the [Move Everything](https://github.com/charlesvestal/move-everything) framework on Ableton Move hardware. Accessibility-first design with screen reader integration and auditory feedback.
 
 ## Downloads
 
-Pre-built releases are available on the [Releases page](https://github.com/CatsAreCool710/Move-Everything-Tuner/releases).
+Available in the Move Everything module store, via the [Move Everything Installer](https://github.com/charlesvestal/move-everything-installer), or as manual downloads from the [Releases page](https://github.com/CatsAreCool710/Move-Everything-Tuner/releases).
 
 ## Introduction
 
-Move Everything Tuner brings a full-featured chromatic and instrument tuner to Ableton Move. It detects pitch from the Move's built-in microphone or line input using the YIN algorithm and provides three auditory feedback modes so you can tune without looking at a screen. The module was designed from the ground up for blind and visually impaired musicians, with complete screen reader integration via the Move Everything shared accessibility system.
+Move Everything Tuner brings a full-featured instrument tuner to Ableton Move. It detects pitch from the Move's built-in microphone or line input using the YIN algorithm and provides three auditory feedback modes so you can tune without looking at a screen. The module was designed from the ground up for blind and visually impaired musicians, with complete screen reader integration via the Move Everything shared accessibility system.
 
 ## Features
 

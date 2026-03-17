@@ -28,12 +28,15 @@
 #include <stdlib.h>
 #include <string.h>
 #include <math.h>
+#include "tuner_debug.h"
 
 #ifndef M_PI
 #define M_PI 3.14159265358979323846
 #endif
 
 #define TWO_PI (2.0 * M_PI)
+
+#define SINE_GAIN 0.5f
 
 /* -------------------------------------------------------------------------- */
 /* Step Guide timing constants                                                 */
@@ -93,6 +96,7 @@ struct tuner_audio {
     float cents_offset;
     int   has_signal;
     int   in_tune;
+    int   guide_in_tune;    /* Latched in-tune state for current figure */
     float a4_ref;           /* A4 reference frequency from user setting */
 
     /* Sine oscillator phases */
@@ -112,6 +116,7 @@ struct tuner_audio {
     int   ks_samples_since; /* Samples since last trigger (for re-trigger) */
     int   ks_retrigger;     /* Samples between re-triggers */
     int   ks_active;        /* 1 = pluck is currently ringing */
+    uint32_t ks_rng_state;  /* LCG random state for KS noise excitation */
 
     /* Step guide timing (in samples) */
     int   guide_note1_len;
@@ -158,7 +163,7 @@ static int apply_ref_shift(int midi_note, int shift) {
 }
 
 static inline float sine_sample(double ph) {
-    return (float)sin(ph);
+    return sinf((float)ph);
 }
 
 /* Compute envelope value for attack/release at given position in a note. */
@@ -195,6 +200,7 @@ tuner_audio_t *tuner_audio_create(int sample_rate) {
     a->cooldown_needed = MS_TO_SAMPLES(GUIDE_COOLDOWN_MS, sample_rate);
 
     a->guide_waiting   = 1;
+    a->ks_rng_state    = 12345;
 
     /* Reference tone */
     a->last_ref_midi   = -1;
@@ -354,6 +360,15 @@ void tuner_audio_update(tuner_audio_t *audio,
             audio->pending_freq1 = tuner_midi_to_freq(guide_midi - 2, a4_ref);
         }
     }
+
+#ifdef TUNER_DEBUG
+    {
+        static int update_log_count = 0;
+        if (++update_log_count % 100 == 0)
+            DLOG("audio: update tgt=%.1f cents=%.1f intune=%d signal=%d",
+                 target_freq, cents_offset, in_tune, has_signal);
+    }
+#endif
 }
 
 /* -------------------------------------------------------------------------- */
@@ -390,6 +405,7 @@ static void render_step_guide(tuner_audio_t *a, float *out, int frames) {
             a->guide_waiting = 1;
             a->quiet_samples = 0;
             a->saw_loud_input = 0;
+            DLOG("guide: WAITING");
         }
         return;
     }
@@ -400,6 +416,9 @@ static void render_step_guide(tuner_audio_t *a, float *out, int frames) {
 
         if (a->input_peak > GUIDE_QUIET_THRESH) {
             /* Loud input — real strum */
+            if (!a->saw_loud_input) {
+                DLOG("guide: loud peak=%.3f", a->input_peak);
+            }
             a->saw_loud_input = 1;
             a->quiet_samples = 0;
             return;
@@ -416,9 +435,13 @@ static void render_step_guide(tuner_audio_t *a, float *out, int frames) {
             return;
         }
 
+        DLOG("guide: quiet samples=%d", a->quiet_samples);
+
         /* Quiet long enough — latch frequencies and start playing */
         a->guide_freq1 = a->pending_freq1;
         a->guide_freq2 = a->pending_freq2;
+        a->guide_in_tune = a->in_tune;
+        DLOG("guide: START f1=%.1f f2=%.1f intune=%d", a->guide_freq1, a->guide_freq2, a->guide_in_tune);
         a->guide_waiting = 0;
         a->guide_played = 0;
         a->guide_pos = 0;
@@ -430,13 +453,14 @@ static void render_step_guide(tuner_audio_t *a, float *out, int frames) {
     /* --- PLAYING: render the two-note figure --- */
 
     /* In-tune: play a short confirmation tone then enter cooldown */
-    if (a->in_tune && fabsf(a->guide_freq1 - a->guide_freq2) < 0.1f) {
+    if (a->guide_in_tune && fabsf(a->guide_freq1 - a->guide_freq2) < 0.1f) {
+        if (a->guide_pos == 0) DLOG("guide: CONFIRM freq=%.1f", a->guide_freq2);
         if (a->guide_pos < a->guide_note1_len) {
             double phase_inc = TWO_PI * a->guide_freq2 / a->sample_rate;
             for (int i = 0; i < frames; i++) {
                 float env = envelope(a->guide_pos + i, a->guide_note1_len,
                                      attack_samples, release_samples);
-                out[i] = sine_sample(a->phase) * a->volume * 0.5f * env;
+                out[i] = sine_sample(a->phase) * a->volume * SINE_GAIN * env;
                 a->phase += phase_inc;
                 if (a->phase >= TWO_PI) a->phase -= TWO_PI;
             }
@@ -445,20 +469,23 @@ static void render_step_guide(tuner_audio_t *a, float *out, int frames) {
             memset(out, 0, frames * sizeof(float));
             a->guide_played = 1;
             a->cooldown_samples = 0;
+            DLOG("guide: COOLDOWN pos=%d", a->guide_pos);
         }
         return;
     }
 
     /* Normal figure: note1 -> gap -> note2 */
+    if (a->guide_pos == 0) DLOG("guide: NORMAL f1=%.1f f2=%.1f", a->guide_freq1, a->guide_freq2);
+    double phase_inc1 = TWO_PI * a->guide_freq1 / a->sample_rate;
+    double phase_inc2 = TWO_PI * a->guide_freq2 / a->sample_rate;
     for (int i = 0; i < frames; i++) {
         float sample = 0.0f;
 
         if (a->guide_pos < note1_end) {
             float env = envelope(a->guide_pos, a->guide_note1_len,
                                  attack_samples, release_samples);
-            double phase_inc = TWO_PI * a->guide_freq1 / a->sample_rate;
             sample = sine_sample(a->phase) * env * a->volume;
-            a->phase += phase_inc;
+            a->phase += phase_inc1;
             if (a->phase >= TWO_PI) a->phase -= TWO_PI;
         } else if (a->guide_pos < gap_end) {
             sample = 0.0f;
@@ -466,12 +493,12 @@ static void render_step_guide(tuner_audio_t *a, float *out, int frames) {
             int pos_in_note = a->guide_pos - gap_end;
             float env = envelope(pos_in_note, a->guide_note2_len,
                                  attack_samples, release_samples);
-            double phase_inc = TWO_PI * a->guide_freq2 / a->sample_rate;
             sample = sine_sample(a->guide_phase) * env * a->volume;
-            a->guide_phase += phase_inc;
+            a->guide_phase += phase_inc2;
             if (a->guide_phase >= TWO_PI) a->guide_phase -= TWO_PI;
         } else {
             /* Figure complete — enter cooldown */
+            DLOG("guide: COOLDOWN pos=%d", a->guide_pos);
             a->guide_played = 1;
             a->cooldown_samples = 0;
             memset(out + i, 0, (frames - i) * sizeof(float));
@@ -487,19 +514,16 @@ static void render_step_guide(tuner_audio_t *a, float *out, int frames) {
 /* Karplus-Strong pluck helpers                                                */
 /* -------------------------------------------------------------------------- */
 
-/* Simple LCG random for noise excitation (deterministic, no stdlib needed) */
-static uint32_t ks_rng_state = 12345;
-
-static float ks_noise(void) {
-    ks_rng_state = ks_rng_state * 1103515245 + 12345;
-    return ((float)(ks_rng_state >> 16) / 32768.0f) - 1.0f;
+static float ks_noise(tuner_audio_t *a) {
+    a->ks_rng_state = a->ks_rng_state * 1103515245 + 12345;
+    return ((float)(a->ks_rng_state >> 16) / 32768.0f) - 1.0f;
 }
 
 /* Fill the delay line with filtered noise to excite the string */
-static void ks_trigger(tuner_audio_t *a) {
-    if (a->target_freq <= 0.0f) return;
+static void ks_trigger(tuner_audio_t *a, float freq) {
+    if (freq <= 0.0f) return;
 
-    int delay_len = (int)(a->sample_rate / a->target_freq);
+    int delay_len = (int)(a->sample_rate / freq);
     if (delay_len < 2) delay_len = 2;
     if (delay_len > KS_MAX_DELAY) delay_len = KS_MAX_DELAY;
 
@@ -509,15 +533,14 @@ static void ks_trigger(tuner_audio_t *a) {
     a->ks_samples_since = 0;
     a->ks_active = 1;
 
-    /* Fill delay line with band-limited noise (slight lowpass for warmth) */
     float prev = 0.0f;
     for (int i = 0; i < delay_len; i++) {
-        float n = ks_noise();
-        /* Simple one-pole lowpass: mix with previous sample */
+        float n = ks_noise(a);
         float filtered = 0.5f * n + 0.5f * prev;
         a->ks_delay[i] = filtered;
         prev = filtered;
     }
+    DLOG("ref: ks freq=%.1f delay=%d", freq, delay_len);
 }
 
 /* -------------------------------------------------------------------------- */
@@ -538,15 +561,12 @@ static void render_reference(tuner_audio_t *a, float *out, int frames) {
 
     /* Detect target note change — re-trigger */
     if (ref_midi != a->last_ref_midi) {
+        DLOG("ref: start midi=%d freq=%.1f style=%d", ref_midi, ref_freq, a->ref_style);
         a->last_ref_midi = ref_midi;
         a->phase = 0.0;
         a->ref_attack_pos = 0;
         if (a->ref_style == TUNER_REF_PLUCK || a->ref_style == TUNER_REF_SOFT_PLUCK) {
-            /* Update target_freq temporarily for ks_trigger delay calculation */
-            float saved = a->target_freq;
-            a->target_freq = ref_freq;
-            ks_trigger(a);
-            a->target_freq = saved;
+            ks_trigger(a, ref_freq);
         }
     }
 
@@ -558,10 +578,8 @@ static void render_reference(tuner_audio_t *a, float *out, int frames) {
         /* Auto re-trigger if the pluck has decayed */
         a->ks_samples_since += frames;
         if (a->ks_samples_since >= a->ks_retrigger) {
-            float saved = a->target_freq;
-            a->target_freq = ref_freq;
-            ks_trigger(a);
-            a->target_freq = saved;
+            DLOG("ref: retrigger midi=%d", ref_midi);
+            ks_trigger(a, ref_freq);
         }
 
         if (!a->ks_active || a->ks_delay_len < 2) {
@@ -595,7 +613,7 @@ static void render_reference(tuner_audio_t *a, float *out, int frames) {
                 env = (float)a->ref_attack_pos / (float)attack;
                 a->ref_attack_pos++;
             }
-            out[i] = sine_sample(a->phase) * a->volume * 0.5f * env;
+            out[i] = sine_sample(a->phase) * a->volume * SINE_GAIN * env;
             a->phase += phase_inc;
             if (a->phase >= TWO_PI) a->phase -= TWO_PI;
         }

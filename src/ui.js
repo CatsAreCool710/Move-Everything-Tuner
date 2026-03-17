@@ -19,6 +19,7 @@
  *   - Handles knob/button/jog/arrow input
  *   - Drives screen reader announcements (autospeak)
  *   - Uses ME shared utilities for menu system and input filtering
+ *   - Drives pad LEDs, step LEDs, and multiple screen display modes
  */
 
 /* -------------------------------------------------------------------------- */
@@ -27,13 +28,16 @@
 
 import { announce, announceParameter, announceView }
     from '/data/UserData/move-anything/shared/screen_reader.mjs';
-import { shouldFilterMessage, decodeDelta }
+import { shouldFilterMessage, decodeDelta, setLED, setButtonLED }
     from '/data/UserData/move-anything/shared/input_filter.mjs';
 import {
     MidiCC, MidiNoteOn,
     MoveKnob1, MoveKnob5, MoveKnob8,
     MoveMainKnob, MoveMainButton, MoveShift, MoveBack, MoveMenu,
-    MoveUp, MoveDown, MoveLeft, MoveRight
+    MoveUp, MoveDown, MoveLeft, MoveRight,
+    BrightGreen, VividYellow, BrightRed, Black, White, DullGreen,
+    DarkGrassGreen, Bright, Cyan, MoveStep1, MoveStep16, MoveSteps,
+    PaleCyan
 } from '/data/UserData/move-anything/shared/constants.mjs';
 import { createValue, createToggle, createEnum, formatItemValue }
     from '/data/UserData/move-anything/shared/menu_items.mjs';
@@ -134,6 +138,60 @@ const NOTE_NAMES = ['C', 'C#', 'D', 'D#', 'E', 'F', 'F#', 'G', 'G#', 'A', 'A#', 
 const AUTOSPEAK_DEBOUNCE_MS = 2000;
 const AUTOSPEAK_CLOSE_DEBOUNCE_MS = 3000;
 const NOTE_STABLE_MS = 800;
+
+/* Pad display modes */
+const PAD_OFF = 0;
+const PAD_METER = 1;
+const PAD_STROBE_LOOP = 2;
+const PAD_STROBE_RING = 3;
+const PAD_STROBE_FILL = 4;
+const PAD_STRING_MAP = 5;
+const PAD_MODE_NAMES = ['Off', 'Meter', 'Strobe Loop', 'Strobe Ring', 'Strobe Fill', 'String Map'];
+
+/* Step display modes */
+const STEP_OFF = 0;
+const STEP_METER = 1;
+const STEP_STROBE = 2;
+const STEP_PRESETS = 3;
+const STEP_STRINGS = 4;
+const STEP_MODE_NAMES = ['Off', 'Meter', 'Strobe', 'Presets', 'Strings'];
+
+/* Screen display modes */
+const SCREEN_CLASSIC = 0;
+const SCREEN_STROBE = 1;
+const SCREEN_NEEDLE = 2;
+const SCREEN_OFFSET = 3;
+const SCREEN_MODE_NAMES = ['Classic', 'Strobe', 'Needle', 'Offset'];
+
+/* Strobe animation speed factor */
+const STROBE_SPEED = 0.15;
+
+/* Pad note layout: 4 rows x 8 cols, bottom-left=68, top-right=99 */
+const PAD_NOTE_START = 68;
+
+/* Strobe paths (arrays of pad note numbers) */
+const STROBE_LOOP_PATH = [84,85,86,87,88,89,90,91, 83, 82,81,80,79,78,77,76]; /* middle 16 ring */
+const STROBE_RING_PATH = [92,93,94,95,96,97,98,99, 91,83,75, 74,73,72,71,70,69,68, 76,84]; /* all 32 perimeter, 22 unique */
+const STROBE_FILL_PATH = [84,85,86,87,88,89,90,91, 83,82,81,80,79,78,77,76]; /* serpentine */
+
+/* Meter color thresholds */
+function centsToColor(absCents) {
+    if (absCents <= 2) return BrightGreen;
+    if (absCents <= 10) return VividYellow;
+    if (absCents <= 25) return Bright; /* orange */
+    return BrightRed;
+}
+
+/* Needle arc pre-computed points */
+const ARC_POINTS = [];
+for (let deg = -80; deg <= 80; deg += 3) {
+    const rad = deg * Math.PI / 180;
+    ARC_POINTS.push({
+        x: 64 + Math.round(28 * Math.sin(rad)),
+        y: 36 - Math.round(28 * Math.cos(rad)),
+        deg: deg
+    });
+}
 
 /* -------------------------------------------------------------------------- */
 /* Drawing helpers                                                             */
@@ -241,6 +299,33 @@ let hasSpokenInTune = false;
 
 /* Tick counter for polling rate */
 let tickCount = 0;
+
+/* Visual display modes */
+let padDisplayMode = PAD_OFF;
+let stepDisplayMode = STEP_OFF;
+let screenDisplayMode = SCREEN_CLASSIC;
+
+/* Strobe animation state */
+let strobePhase = 0;
+let stepStrobePhase = 0;
+let prevPadLedIndex = -1;
+let prevStepLedIndex = -1;
+
+/* Screen strobe state */
+let screenStrobePhase = 0;
+
+/* LED tracking for cleanup */
+let activePadLeds = new Set();
+let activeStepLeds = new Set();
+
+/* Pad block state */
+let padBlocked = false;
+
+/* Previous string index for auto-detect announce */
+let prevAutoStringIndex = -1;
+
+/* LED update throttle */
+let ledTickCounter = 0;
 
 /* -------------------------------------------------------------------------- */
 /* Menu system                                                                 */
@@ -391,6 +476,31 @@ function buildMenuItems() {
             min: 0, max: 100, step: 5,
             format: function(v) { return v + '%'; }
         }),
+        createEnum('Pad Display', {
+            get: function() { return padDisplayMode; },
+            set: function(val) {
+                cleanupPadLeds();
+                padDisplayMode = val;
+                onPadModeChange();
+            },
+            options: [0, 1, 2, 3, 4, 5],
+            format: function(val) { return PAD_MODE_NAMES[val] || 'Off'; }
+        }),
+        createEnum('Step Display', {
+            get: function() { return stepDisplayMode; },
+            set: function(val) {
+                cleanupStepLeds();
+                stepDisplayMode = val;
+            },
+            options: [0, 1, 2, 3, 4],
+            format: function(val) { return STEP_MODE_NAMES[val] || 'Off'; }
+        }),
+        createEnum('Screen Display', {
+            get: function() { return screenDisplayMode; },
+            set: function(val) { screenDisplayMode = val; },
+            options: [0, 1, 2, 3],
+            format: function(val) { return SCREEN_MODE_NAMES[val] || 'Classic'; }
+        }),
     ];
 }
 
@@ -452,6 +562,12 @@ function pollDSP() {
     if (autoDetect && stringCount > 0) {
         const dspIdx = parseInt(getParam('string_index'));
         if (!isNaN(dspIdx)) {
+            if (dspIdx !== prevAutoStringIndex && prevAutoStringIndex >= 0) {
+                const newLabel = getParam('string_label') || '---';
+                announce('String ' + labelToSpoken(newLabel));
+                /*DEBUG*/ console.log('[tuner-ui] auto string change: ' + prevAutoStringIndex + '->' + dspIdx);
+            }
+            prevAutoStringIndex = dspIdx;
             stringIndex = dspIdx;
             stringLabel = getParam('string_label') || '---';
         }
@@ -498,13 +614,16 @@ function autospeakTick() {
             const dir = centsOffset > 0 ? 'sharp' : centsOffset < 0 ? 'flat' : '';
             if (inTune) {
                 announce(detectedNote + ', in tune');
+                /*DEBUG*/ console.log('[tuner-ui] speak: ' + detectedNote + ', in tune');
                 hasSpokenInTune = true;
             } else {
                 announce(detectedNote + ', ' + Math.abs(centsOffset) + ' cents ' + dir);
+                /*DEBUG*/ console.log('[tuner-ui] speak: ' + detectedNote + ', ' + Math.abs(centsOffset) + ' cents ' + dir);
             }
         } else {
             /* Reference mode without passthrough — just announce the note name */
             announce(detectedNote);
+            /*DEBUG*/ console.log('[tuner-ui] speak: ' + detectedNote);
         }
         hasSpokenInitial = true;
         lastSpokenNote = detectedNote;
@@ -520,6 +639,7 @@ function autospeakTick() {
     if (hasSpokenInitial && !hasSpokenInTune && inTune) {
         if (timeSinceSpeak >= 500) {
             announce(detectedNote + ', in tune');
+            /*DEBUG*/ console.log('[tuner-ui] speak: ' + detectedNote + ', in tune (confirmed)');
             hasSpokenInTune = true;
             lastSpeakTime = now;
         }
@@ -542,17 +662,288 @@ function autospeakTick() {
 }
 
 /* -------------------------------------------------------------------------- */
+/* LED Helper Functions                                                        */
+/* -------------------------------------------------------------------------- */
+
+function setPadLed(note, color) {
+    activePadLeds.add(note);
+    setLED(note, color);
+}
+
+function setStepLed(note, color) {
+    activeStepLeds.add(note);
+    setLED(note, color);
+}
+
+function cleanupPadLeds() {
+    /*DEBUG*/ console.log('[tuner-ui] led: cleanup pads=' + activePadLeds.size + ' steps=' + activeStepLeds.size);
+    for (const note of activePadLeds) {
+        setLED(note, Black);
+    }
+    activePadLeds.clear();
+    if (padBlocked) {
+        try { host_pad_block(0); } catch(e) {}
+        padBlocked = false;
+    }
+}
+
+function cleanupStepLeds() {
+    for (const note of activeStepLeds) {
+        setLED(note, Black);
+    }
+    activeStepLeds.clear();
+}
+
+function cleanupAllLeds() {
+    cleanupPadLeds();
+    cleanupStepLeds();
+}
+
+function onPadModeChange() {
+    if (padDisplayMode === PAD_STRING_MAP) {
+        try { host_pad_block(1); } catch(e) {}
+        padBlocked = true;
+    } else if (padBlocked) {
+        try { host_pad_block(0); } catch(e) {}
+        padBlocked = false;
+    }
+    strobePhase = 0;
+    prevPadLedIndex = -1;
+}
+
+/* -------------------------------------------------------------------------- */
+/* Pad Display Renderers                                                       */
+/* -------------------------------------------------------------------------- */
+
+function updatePadDisplay() {
+    switch (padDisplayMode) {
+        case PAD_METER: updatePadMeter(); break;
+        case PAD_STROBE_LOOP: updatePadStrobe(STROBE_LOOP_PATH); break;
+        case PAD_STROBE_RING: updatePadStrobe(STROBE_RING_PATH); break;
+        case PAD_STROBE_FILL: updatePadStrobe(STROBE_FILL_PATH); break;
+        case PAD_STRING_MAP: updatePadStringMap(); break;
+    }
+}
+
+function updatePadMeter() {
+    /* Bottom row of 8 pads (notes 68-75) as segmented meter */
+    const pads = [68, 69, 70, 71, 72, 73, 74, 75];
+    if (!hasSignal) {
+        for (let i = 0; i < 8; i++) setPadLed(pads[i], Black);
+        return;
+    }
+    /* Map cents to meter: center = pads 3,4 (indices 3,4 = notes 71,72) */
+    for (let i = 0; i < 8; i++) {
+        if (inTune) {
+            /* In tune: center 2 pads green */
+            setPadLed(pads[i], (i === 3 || i === 4) ? BrightGreen : Black);
+        } else {
+            /* Map direction: left = flat, right = sharp */
+            const needlePos = 3.5 + (centsOffset / 50) * 3.5;
+            const dist = Math.abs(i - needlePos);
+            if (dist < 1.5) {
+                setPadLed(pads[i], centsToColor(Math.abs(centsOffset)));
+            } else {
+                setPadLed(pads[i], Black);
+            }
+        }
+    }
+}
+
+function updatePadStrobe(path) {
+    if (!hasSignal) {
+        for (let i = 0; i < path.length; i++) setPadLed(path[i], Black);
+        strobePhase = 0;
+        return;
+    }
+    if (inTune) {
+        /* In tune: all pads steady green */
+        for (let i = 0; i < path.length; i++) setPadLed(path[i], BrightGreen);
+        strobePhase = 0;
+        return;
+    }
+    /* Chase animation */
+    strobePhase += centsOffset * STROBE_SPEED;
+    const len = path.length;
+    const idx = ((Math.floor(strobePhase) % len) + len) % len;
+
+    if (idx !== prevPadLedIndex) {
+        /* Clear previous, light new */
+        for (let i = 0; i < len; i++) {
+            if (i === idx || i === (idx + 1) % len) {
+                setPadLed(path[i], centsToColor(Math.abs(centsOffset)));
+            } else {
+                setPadLed(path[i], Black);
+            }
+        }
+        prevPadLedIndex = idx;
+    }
+}
+
+function updatePadStringMap() {
+    if (stringCount <= 0) return;
+    const absCents = Math.abs(centsOffset);
+
+    for (let s = 0; s < stringCount && s < 8; s++) {
+        const col = s;
+        const color = (s === stringIndex && hasSignal) ? centsToColor(absCents) :
+                      (s === stringIndex) ? White : DarkGrassGreen;
+        for (let row = 0; row < 4; row++) {
+            const note = 68 + (3 - row) * 8 + col;
+            setPadLed(note, color);
+        }
+    }
+    /* Clear unused columns */
+    for (let col = stringCount; col < 8; col++) {
+        for (let row = 0; row < 4; row++) {
+            const note = 68 + (3 - row) * 8 + col;
+            setPadLed(note, Black);
+        }
+    }
+}
+
+/* -------------------------------------------------------------------------- */
+/* Step Display Renderers                                                      */
+/* -------------------------------------------------------------------------- */
+
+function updateStepDisplay() {
+    switch (stepDisplayMode) {
+        case STEP_METER: updateStepMeter(); break;
+        case STEP_STROBE: updateStepStrobe(); break;
+        case STEP_PRESETS: updateStepPresets(); break;
+        case STEP_STRINGS: updateStepStrings(); break;
+    }
+}
+
+function updateStepMeter() {
+    if (!hasSignal) {
+        for (let i = 0; i < 16; i++) setStepLed(16 + i, Black);
+        return;
+    }
+    const center = 7.5;
+    for (let i = 0; i < 16; i++) {
+        if (inTune) {
+            setStepLed(16 + i, (i === 7 || i === 8) ? BrightGreen : Black);
+        } else {
+            const needlePos = center + (centsOffset / 50) * center;
+            const dist = Math.abs(i - needlePos);
+            if (dist < 1.5) {
+                setStepLed(16 + i, centsToColor(Math.abs(centsOffset)));
+            } else {
+                setStepLed(16 + i, Black);
+            }
+        }
+    }
+}
+
+function updateStepStrobe() {
+    if (!hasSignal) {
+        for (let i = 0; i < 16; i++) setStepLed(16 + i, Black);
+        stepStrobePhase = 0;
+        return;
+    }
+    if (inTune) {
+        for (let i = 0; i < 16; i++) setStepLed(16 + i, BrightGreen);
+        stepStrobePhase = 0;
+        return;
+    }
+    stepStrobePhase += centsOffset * STROBE_SPEED;
+    const idx = ((Math.floor(stepStrobePhase) % 16) + 16) % 16;
+    if (idx !== prevStepLedIndex) {
+        for (let i = 0; i < 16; i++) {
+            if (i === idx || i === (idx + 1) % 16) {
+                setStepLed(16 + i, centsToColor(Math.abs(centsOffset)));
+            } else {
+                setStepLed(16 + i, Black);
+            }
+        }
+        prevStepLedIndex = idx;
+    }
+}
+
+function updateStepPresets() {
+    const cat = CATEGORIES[categoryIndex];
+    const catSize = cat.end - cat.start + 1;
+    for (let i = 0; i < 16; i++) {
+        if (i < catSize) {
+            const presetIdx = cat.start + i;
+            if (presetIdx === modeIndex) {
+                setStepLed(16 + i, BrightGreen);
+            } else {
+                setStepLed(16 + i, White);
+            }
+        } else {
+            setStepLed(16 + i, Black);
+        }
+    }
+}
+
+function updateStepStrings() {
+    if (stringCount <= 0) {
+        /* Chromatic mode: fall back to meter */
+        updateStepMeter();
+        return;
+    }
+    for (let i = 0; i < 16; i++) {
+        if (i < stringCount) {
+            if (i === stringIndex && hasSignal) {
+                setStepLed(16 + i, centsToColor(Math.abs(centsOffset)));
+            } else if (i === stringIndex) {
+                setStepLed(16 + i, White);
+            } else {
+                setStepLed(16 + i, DullGreen);
+            }
+        } else {
+            setStepLed(16 + i, Black);
+        }
+    }
+}
+
+/* -------------------------------------------------------------------------- */
 /* Display rendering                                                           */
 /* -------------------------------------------------------------------------- */
 
-function drawTuner() {
-    clear_screen();
-
-    /* Header: instrument name + A4 ref */
+/* Shared header for all screen modes */
+function drawHeader() {
     const modeName = MODE_NAMES[modeIndex] || 'Chromatic';
     print(1, 0, modeName, 1);
     printRight(0, 'A=' + a4Ref, 1);
     hLine(0, 9, DISPLAY_W, 1);
+}
+
+/* Shared footer for all screen modes */
+function drawFooter() {
+    hLine(0, 53, DISPLAY_W, 1);
+    let footerLeft;
+    if (stringCount > 0) {
+        footerLeft = 'Str:' + stringLabel;
+    } else if (!autoDetect) {
+        footerLeft = midiToNoteName(manualMidi);
+    } else {
+        footerLeft = 'Auto';
+    }
+    const fbShort = feedbackIndex === 0 ? 'Stp' : feedbackIndex === 1 ? 'Ref' : 'Off';
+    const footerRight = fbShort + (autospeakOn ? ' Spk' : '');
+    print(1, 55, footerLeft, 1);
+    printRight(55, footerRight, 1);
+}
+
+/* Screen display mode dispatcher */
+function drawTuner() {
+    clear_screen();
+    switch (screenDisplayMode) {
+        case SCREEN_CLASSIC: drawClassic(); break;
+        case SCREEN_STROBE: drawScreenStrobe(); break;
+        case SCREEN_NEEDLE: drawNeedle(); break;
+        case SCREEN_OFFSET: drawOffsetDisplay(); break;
+        default: drawClassic(); break;
+    }
+}
+
+/* Classic tuner display (original drawTuner content) */
+function drawClassic() {
+    /* Header */
+    drawHeader();
 
     if (!hasSignal) {
         /* No signal */
@@ -603,21 +994,147 @@ function drawTuner() {
     }
 
     /* Footer */
-    hLine(0, 53, DISPLAY_W, 1);
+    drawFooter();
+}
 
-    let footerLeft;
-    if (stringCount > 0) {
-        footerLeft = 'Str:' + stringLabel;
-    } else if (!autoDetect) {
-        footerLeft = midiToNoteName(manualMidi);
-    } else {
-        footerLeft = 'Auto';
+/* Strobe screen display */
+function drawScreenStrobe() {
+    /* Header */
+    drawHeader();
+
+    if (!hasSignal) {
+        printCentered(30, 'Play a note', 1);
+        drawFooter();
+        return;
     }
 
-    const fbShort = feedbackIndex === 0 ? 'Stp' : feedbackIndex === 1 ? 'Ref' : 'Off';
-    const footerRight = fbShort + (autospeakOn ? ' Spk' : '');
-    print(1, 55, footerLeft, 1);
-    printRight(55, footerRight, 1);
+    /* Note name */
+    printCentered(12, detectedNote, 1);
+
+    /* Strobe bars - 8 vertical bars across the display */
+    const barW = 6;
+    const barH = 20;
+    const barY = 24;
+    const barSpacing = 14;
+    const startX = 8;
+
+    screenStrobePhase += centsOffset * 0.08;
+
+    for (let b = 0; b < 8; b++) {
+        const baseX = startX + b * barSpacing;
+        const offset = Math.floor(screenStrobePhase) % barSpacing;
+        const drawX = baseX + offset;
+        if (drawX >= 0 && drawX + barW <= DISPLAY_W) {
+            fill_rect(drawX, barY, barW, barH, 1);
+        }
+    }
+
+    /* Status */
+    if (inTune) {
+        printCentered(48, 'IN TUNE', 1);
+    } else {
+        const centsStr = (centsOffset > 0 ? '+' : '') + centsOffset + 'c';
+        printCentered(48, centsStr, 1);
+    }
+
+    drawFooter();
+}
+
+/* Needle (analog meter) screen display */
+function drawNeedle() {
+    /* Header */
+    drawHeader();
+
+    if (!hasSignal) {
+        printCentered(30, 'Play a note', 1);
+        drawFooter();
+        return;
+    }
+
+    /* Draw arc using pre-computed points */
+    for (let i = 0; i < ARC_POINTS.length; i++) {
+        set_pixel(ARC_POINTS[i].x, ARC_POINTS[i].y, 1);
+    }
+
+    /* Tick marks at 0, ±25, ±50 cents */
+    const ticks = [0, -25, 25, -50, 50];
+    for (let t = 0; t < ticks.length; t++) {
+        const deg = (ticks[t] / 50) * 80;
+        const rad = deg * Math.PI / 180;
+        const outerR = 30;
+        const innerR = 26;
+        const ox = 64 + Math.round(outerR * Math.sin(rad));
+        const oy = 36 - Math.round(outerR * Math.cos(rad));
+        const ix = 64 + Math.round(innerR * Math.sin(rad));
+        const iy = 36 - Math.round(innerR * Math.cos(rad));
+        if (typeof display !== 'undefined' && display.drawLine) {
+            display.drawLine(ix, iy, ox, oy);
+        } else {
+            set_pixel(ox, oy, 1);
+            set_pixel(ix, iy, 1);
+        }
+    }
+
+    /* Needle */
+    const needleDeg = (centsOffset / 50) * 80;
+    const needleRad = needleDeg * Math.PI / 180;
+    const nx = 64 + Math.round(26 * Math.sin(needleRad));
+    const ny = 36 - Math.round(26 * Math.cos(needleRad));
+    if (typeof display !== 'undefined' && display.drawLine) {
+        display.drawLine(64, 36, nx, ny);
+    } else {
+        /* Fallback: plot pixels along the line */
+        const steps = 20;
+        for (let s = 0; s <= steps; s++) {
+            const px = Math.round(64 + (nx - 64) * s / steps);
+            const py = Math.round(36 + (ny - 36) * s / steps);
+            set_pixel(px, py, 1);
+        }
+    }
+
+    /* Note name below arc */
+    printCentered(44, detectedNote, 1);
+
+    /* Status */
+    if (inTune) {
+        printCentered(54, 'IN TUNE', 1);
+    } else {
+        const centsStr = (centsOffset > 0 ? '+' : '') + centsOffset + 'c';
+        printCentered(54, centsStr, 1);
+    }
+}
+
+/* Offset (large cents readout) screen display */
+function drawOffsetDisplay() {
+    /* Header */
+    drawHeader();
+
+    if (!hasSignal) {
+        printCentered(22, 'Listening...', 1);
+        printCentered(34, 'Play a note', 1);
+        drawFooter();
+        return;
+    }
+
+    /* Note name */
+    printCentered(14, detectedNote, 1);
+
+    /* Large cents display */
+    if (inTune) {
+        printCentered(28, 'IN TUNE', 1);
+    } else {
+        const centsStr = (centsOffset > 0 ? '+' : '') + centsOffset + 'c';
+        printCentered(28, centsStr, 1);
+    }
+
+    /* Target info */
+    if (stringCount > 0 && targetNote !== '---') {
+        printCentered(42, 'Str: ' + stringLabel, 1);
+    } else if (!autoDetect) {
+        printCentered(42, 'Tgt: ' + midiToNoteName(manualMidi), 1);
+    }
+
+    drawFooter();
 }
 
 function drawMenu() {
@@ -635,6 +1152,8 @@ function drawMenu() {
 /* -------------------------------------------------------------------------- */
 
 function handleInput(cc, value) {
+    /*DEBUG*/ console.log('[tuner-ui] input: cc=' + cc + ' val=' + value + ' shift=' + shiftHeld);
+
     /* Shift tracking */
     if (cc === MoveShift) {
         shiftHeld = (value > 0);
@@ -716,6 +1235,7 @@ function handleInput(cc, value) {
             sendParamNow('autospeak', autospeakOn ? 'on' : 'off');
             announce('Autospeak ' + (autospeakOn ? 'on' : 'off'));
         } else {
+            cleanupAllLeds();
             try { host_exit_module(); } catch (e) { /* ignore */ }
         }
         return;
@@ -728,6 +1248,7 @@ function handleInput(cc, value) {
             feedbackIndex = (feedbackIndex + 1) % FEEDBACK_IDS.length;
             sendParamNow('feedback_mode', FEEDBACK_IDS[feedbackIndex]);
             announce('Feedback: ' + FEEDBACK_NAMES[feedbackIndex]);
+            /*DEBUG*/ console.log('[tuner-ui] feedback: mode=' + feedbackIndex + ' name=' + FEEDBACK_NAMES[feedbackIndex]);
         } else {
             /* Jog click: announce current tuning state */
             if (hasSignal) {
@@ -763,6 +1284,7 @@ function handleInput(cc, value) {
                 stringLabel = getParam('string_label') || '---';
             }
             announce(CATEGORIES[categoryIndex].name + '. ' + MODE_NAMES[modeIndex]);
+            /*DEBUG*/ console.log('[tuner-ui] preset: idx=' + modeIndex + ' name=' + MODE_NAMES[modeIndex]);
         } else {
             /* Jog: cycle presets within current category */
             const cat = CATEGORIES[categoryIndex];
@@ -779,6 +1301,7 @@ function handleInput(cc, value) {
                 stringLabel = getParam('string_label') || '---';
             }
             announce(MODE_NAMES[modeIndex]);
+            /*DEBUG*/ console.log('[tuner-ui] preset: idx=' + modeIndex + ' name=' + MODE_NAMES[modeIndex]);
         }
         return;
     }
@@ -862,6 +1385,24 @@ function handleInput(cc, value) {
                 announceParameter('Threshold', tuneThreshold + ' cents');
                 break;
             }
+            case 5: {
+                cleanupPadLeds();
+                padDisplayMode = (padDisplayMode + (delta > 0 ? 1 : PAD_MODE_NAMES.length - 1)) % PAD_MODE_NAMES.length;
+                onPadModeChange();
+                announceParameter('Pad Mode', PAD_MODE_NAMES[padDisplayMode]);
+                break;
+            }
+            case 6: {
+                cleanupStepLeds();
+                stepDisplayMode = (stepDisplayMode + (delta > 0 ? 1 : STEP_MODE_NAMES.length - 1)) % STEP_MODE_NAMES.length;
+                announceParameter('Step Mode', STEP_MODE_NAMES[stepDisplayMode]);
+                break;
+            }
+            case 7: {
+                screenDisplayMode = (screenDisplayMode + (delta > 0 ? 1 : SCREEN_MODE_NAMES.length - 1)) % SCREEN_MODE_NAMES.length;
+                announceParameter('Screen Mode', SCREEN_MODE_NAMES[screenDisplayMode]);
+                break;
+            }
         }
         return;
     }
@@ -914,8 +1455,10 @@ globalThis.init = function() {
     queueParam('ref_mute_input', refMuteInput ? 'on' : 'off');
 
     announceView('Tuner');
-    announce('Chromatic mode, target ' + midiToSpokenName(manualMidi) +
+    announce('Target ' + midiToSpokenName(manualMidi) +
              '. Use arrows to select note. Turn jog to change instrument. Press menu for settings.');
+
+    /*DEBUG*/ console.log('[tuner-ui] init: preset=' + modeIndex + ' mode=' + feedbackIndex + ' autospeak=' + autospeakOn);
 };
 
 globalThis.tick = function() {
@@ -929,7 +1472,16 @@ globalThis.tick = function() {
         pollDSP();
     }
 
+    /*DEBUG*/ if (tickCount % 120 === 0) console.log('[tuner-ui] poll: note=' + detectedNote + ' cents=' + centsOffset + ' inTune=' + inTune + ' hasSignal=' + hasSignal);
+
     autospeakTick();
+
+    /* Update visual feedback LEDs (throttled to ~30Hz) */
+    ledTickCounter++;
+    if (ledTickCounter % 2 === 0) {
+        if (padDisplayMode !== PAD_OFF) updatePadDisplay();
+        if (stepDisplayMode !== STEP_OFF) updateStepDisplay();
+    }
 
     if (inMenu) {
         drawMenu();
@@ -939,7 +1491,7 @@ globalThis.tick = function() {
 };
 
 /* Knob parameter names for touch announcements (knobs 1-8) */
-const KNOB_NAMES = ['Volume', 'Passthru', 'A4 Ref', 'Gate', 'Threshold', '', '', ''];
+const KNOB_NAMES = ['Volume', 'Passthru', 'A4 Ref', 'Gate', 'Threshold', 'Pad Mode', 'Step Mode', 'Screen Mode'];
 
 globalThis.onMidiMessageInternal = function(data) {
     if (!data || data.length < 3) return;
@@ -947,6 +1499,8 @@ globalThis.onMidiMessageInternal = function(data) {
     const status = data[0] & 0xF0;
     const d1 = data[1];
     const d2 = data[2];
+
+    /*DEBUG*/ console.log('[tuner-ui] midi: status=' + status.toString(16) + ' d1=' + d1 + ' d2=' + d2);
 
     /* Handle knob touch BEFORE filtering (touches are filtered by default).
      * Knob touches arrive as Note On with note 0-7, velocity > 0. */
@@ -967,8 +1521,54 @@ globalThis.onMidiMessageInternal = function(data) {
                 case 2: val = a4Ref + ' Hz'; break;
                 case 3: val = noiseGate + '%'; break;
                 case 4: val = tuneThreshold + ' cents'; break;
+                case 5: val = PAD_MODE_NAMES[padDisplayMode]; break;
+                case 6: val = STEP_MODE_NAMES[stepDisplayMode]; break;
+                case 7: val = SCREEN_MODE_NAMES[screenDisplayMode]; break;
             }
             announceParameter(name, val);
+        }
+        return;
+    }
+
+    /* Handle step button presses for preset/string selection */
+    if (status === MidiNoteOn && d2 > 0 && d1 >= 16 && d1 <= 31) {
+        const stepIdx = d1 - 16;
+        if (stepDisplayMode === STEP_PRESETS) {
+            const cat = CATEGORIES[categoryIndex];
+            const catSize = cat.end - cat.start + 1;
+            if (stepIdx < catSize) {
+                modeIndex = cat.start + stepIdx;
+                stringIndex = 0;
+                stringCount = MODE_STRING_COUNTS[modeIndex];
+                queueParam('tn_inst', String(modeIndex));
+                if (refStyleAuto) refStyle = PRESET_DEFAULT_REF_STYLES[modeIndex];
+                announce(MODE_NAMES[modeIndex] + ' selected');
+                /*DEBUG*/ console.log('[tuner-ui] step preset: idx=' + modeIndex + ' name=' + MODE_NAMES[modeIndex]);
+            }
+            return;
+        }
+        if (stepDisplayMode === STEP_STRINGS && stringCount > 0) {
+            if (stepIdx < stringCount) {
+                stringIndex = stepIdx;
+                sendParamNow('string_index', String(stringIndex));
+                stringLabel = getParam('string_label') || '---';
+                announce('String ' + labelToSpoken(stringLabel) + ' selected');
+                /*DEBUG*/ console.log('[tuner-ui] step string: idx=' + stringIndex + ' label=' + stringLabel);
+            }
+            return;
+        }
+    }
+
+    /* Handle pad presses for String Map mode */
+    if (status === MidiNoteOn && d2 > 0 && d1 >= 68 && d1 <= 99 && padDisplayMode === PAD_STRING_MAP) {
+        const padIdx = d1 - 68;
+        const col = padIdx % 8;
+        if (col < stringCount) {
+            stringIndex = col;
+            sendParamNow('string_index', String(stringIndex));
+            stringLabel = getParam('string_label') || '---';
+            announce('String ' + labelToSpoken(stringLabel) + ' selected');
+            /*DEBUG*/ console.log('[tuner-ui] pad string: col=' + col + ' label=' + stringLabel);
         }
         return;
     }

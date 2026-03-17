@@ -31,10 +31,12 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <math.h>
+#include <stdarg.h>
 
 #include "tuner_engine.h"
 #include "tuner_audio.h"
 #include "tuner_presets.h"
+#include "tuner_debug.h"
 
 /* -------------------------------------------------------------------------- */
 /* Host API v1 (provided to Plugin API v2 modules, layout must match exactly) */
@@ -71,6 +73,20 @@ typedef struct {
 } plugin_api_v2_t;
 
 static const host_api_v1_t *g_host = NULL;
+
+#ifdef TUNER_DEBUG
+void tuner_dlog_impl(const char *fmt, ...) {
+    if (!g_host || !g_host->log) return;
+    char buf[512];
+    char final[540];
+    va_list ap;
+    va_start(ap, fmt);
+    vsnprintf(buf, sizeof(buf), fmt, ap);
+    va_end(ap);
+    snprintf(final, sizeof(final), "[tuner] %s", buf);
+    g_host->log(final);
+}
+#endif
 
 /* -------------------------------------------------------------------------- */
 /* Instance state                                                              */
@@ -113,6 +129,9 @@ typedef struct {
     int   guide_tone_ms;        /* Step guide note duration (ms) */
     int   guide_gap_ms;         /* Step guide gap between notes (ms) */
     int   ref_mute_input;       /* 1=mute input knobs in reference mode */
+    int   target_dirty;         /* 1 = target needs recomputation */
+    int   prev_in_tune;         /* Previous in_tune state for change logging */
+    int   prev_string_index;    /* Previous string_index for auto-detect logging */
 
     /* Working buffer for feedback tones */
     float feedback_buf[256];
@@ -177,6 +196,10 @@ static void update_target(tuner_instance_t *inst) {
             int closest = tuner_find_closest_string(preset, inst->detection.midi_note);
             if (closest >= 0) {
                 inst->string_index = closest;
+                if (closest != inst->prev_string_index) {
+                    DLOG("auto: string %d->%d", inst->prev_string_index, closest);
+                    inst->prev_string_index = closest;
+                }
             }
         }
         /* Target is always the selected string's note */
@@ -247,6 +270,9 @@ static void *v2_create_instance(const char *module_dir, const char *json_default
     inst->guide_tone_ms      = 200;     /* step guide note duration */
     inst->guide_gap_ms       = 40;      /* step guide gap between notes */
     inst->ref_mute_input     = 1;       /* mute input knobs in reference mode */
+    inst->target_dirty       = 1;       /* compute target on first render */
+    inst->prev_in_tune       = -1;      /* no previous state */
+    inst->prev_string_index  = -1;      /* no previous state */
 
     tuner_engine_set_a4(inst->engine, inst->a4_ref);
     tuner_engine_set_noise_gate(inst->engine, inst->noise_gate);
@@ -294,11 +320,7 @@ static void v2_set_param(void *instance, const char *key, const char *val) {
     tuner_instance_t *inst = (tuner_instance_t *)instance;
     if (!inst || !key || !val) return;
 
-    if (g_host && g_host->log) {
-        char msg[256];
-        snprintf(msg, sizeof(msg), "[tuner] set_param '%s'='%s'", key, val);
-        g_host->log(msg);
-    }
+    DLOG("set_param '%s'='%s'", key, val);
 
     if (str_eq(key, "tn_inst") || str_eq(key, "preset_idx")) {
         /* Integer preset index — reliable path that bypasses host interception */
@@ -318,14 +340,10 @@ static void v2_set_param(void *instance, const char *key, const char *val) {
             }
 
             update_target(inst);
-            if (g_host && g_host->log) {
-                char msg[256];
-                snprintf(msg, sizeof(msg),
-                    "[tuner] tn_inst=%d name=%s shift=%d ref=%d tgt_midi=%d",
-                    idx, TUNER_PRESETS[idx].name, shift,
-                    inst->ref_style, inst->target_midi);
-                g_host->log(msg);
-            }
+            inst->target_dirty = 1;
+            DLOG("preset idx=%d name=%s shift=%d ref=%d tgt_midi=%d",
+                 idx, TUNER_PRESETS[idx].name, shift,
+                 inst->ref_style, inst->target_midi);
         }
     } else if (str_eq(key, "tuning_preset")) {
         /* String-based fallback */
@@ -340,6 +358,7 @@ static void v2_set_param(void *instance, const char *key, const char *val) {
                 tuner_audio_set_ref_style(inst->audio, (tuner_ref_style_t)inst->ref_style);
             }
             update_target(inst);
+            inst->target_dirty = 1;
         }
     } else if (str_eq(key, "string_index")) {
         int v = atoi(val);
@@ -347,6 +366,7 @@ static void v2_set_param(void *instance, const char *key, const char *val) {
         if (v >= 0 && v < preset->num_strings) {
             inst->string_index = v;
             update_target(inst);
+            inst->target_dirty = 1;
         }
     } else if (str_eq(key, "a4_ref")) {
         int v = atoi(val);
@@ -354,6 +374,7 @@ static void v2_set_param(void *instance, const char *key, const char *val) {
             inst->a4_ref = (float)v;
             tuner_engine_set_a4(inst->engine, inst->a4_ref);
             update_target(inst);
+            inst->target_dirty = 1;
         }
     } else if (str_eq(key, "feedback_mode")) {
         if (str_eq(val, "step_guide")) {
@@ -409,11 +430,13 @@ static void v2_set_param(void *instance, const char *key, const char *val) {
         inst->ref_mute_input = (str_eq(val, "on") || str_eq(val, "1")) ? 1 : 0;
     } else if (str_eq(key, "auto_detect")) {
         inst->auto_detect = (str_eq(val, "on") || str_eq(val, "1")) ? 1 : 0;
+        inst->target_dirty = 1;
     } else if (str_eq(key, "manual_midi")) {
         int v = atoi(val);
         if (v >= 0 && v <= 127) {
             inst->manual_midi = v;
             update_target(inst);
+            inst->target_dirty = 1;
         }
     } else if (str_eq(key, "state")) {
         /* Restore all settings from JSON state blob */
@@ -483,10 +506,14 @@ static void v2_set_param(void *instance, const char *key, const char *val) {
         inst->ref_mute_input = json_get_int(val, "ref_mute", 1);
 
         update_target(inst);
+        inst->target_dirty = 1;
 
         if (g_host && g_host->log) {
             g_host->log("[tuner] state restored");
         }
+        DLOG("state: preset=%d string=%d midi=%d fb=%d a4=%d",
+             inst->preset_index, inst->string_index, inst->manual_midi,
+             inst->feedback_mode, (int)inst->a4_ref);
     }
 }
 
@@ -637,12 +664,13 @@ static void v2_render_block(void *instance, int16_t *out_lr, int frames) {
     );
 
     /* Measure input peak */
-    float peak_in = 0.0f;
+    int16_t max_abs = 0;
     for (int i = 0; i < frames * 2; i++) {
-        float v = (float)audio_in[i] / 32768.0f;
+        int16_t v = audio_in[i];
         if (v < 0) v = -v;
-        if (v > peak_in) peak_in = v;
+        if (v > max_abs) max_abs = v;
     }
+    float peak_in = (float)max_abs / 32768.0f;
     inst->debug_peak_in = peak_in;
 
     /* Check if audio generator is producing tones (freeze detector if so) */
@@ -674,12 +702,21 @@ static void v2_render_block(void *instance, int16_t *out_lr, int frames) {
             inst->detection_hold_blocks--;
             if (inst->detection_hold_blocks <= 0) {
                 inst->has_detection = 0;
+                DLOG("det: hold expired");
             }
         }
     }
 
+    /* Mark target dirty when auto-detect is on (detection may have changed) */
+    if (inst->auto_detect) {
+        inst->target_dirty = 1;
+    }
+
     /* Update target note */
-    update_target(inst);
+    if (inst->target_dirty) {
+        update_target(inst);
+        inst->target_dirty = 0;
+    }
 
     /* Compute tuning state */
     float cents = 0.0f;
@@ -691,6 +728,11 @@ static void v2_render_block(void *instance, int16_t *out_lr, int frames) {
         if (cents < -50.0f) cents = -50.0f;
         inst->detection.cents_offset = cents;
         in_tune = (fabsf(cents) <= (float)inst->tune_threshold);
+    }
+
+    if (in_tune != inst->prev_in_tune) {
+        DLOG("tune: cents=%.1f intune=%d", cents, in_tune);
+        inst->prev_in_tune = in_tune;
     }
 
     /* Update audio feedback */
@@ -705,6 +747,7 @@ static void v2_render_block(void *instance, int16_t *out_lr, int frames) {
         inst->detection_hold_blocks = 0;
         inst->detection.frequency = 0.0f;
         inst->detection.confidence = 0.0f;
+        DLOG("det: cleared by guide");
     }
 
     /* Render feedback tones */
@@ -737,16 +780,12 @@ static void v2_render_block(void *instance, int16_t *out_lr, int frames) {
 
     /* Throttled diagnostic logging (~every 2 seconds) */
     inst->render_count++;
-    if (g_host && g_host->log &&
-        (inst->render_count == 1 || inst->render_count % 689 == 0)) {
-        char msg[256];
-        snprintf(msg, sizeof(msg),
-            "[tuner] blk=%d in=%.3f out=%.3f det=%d f=%.1f c=%.1f tgt=%d play=%d hold=%d auto=%d",
-            inst->render_count, inst->debug_peak_in, inst->debug_peak_out,
-            inst->has_detection, inst->detection.frequency,
-            inst->detection.cents_offset, inst->target_midi,
-            tones_playing, inst->detection_hold_blocks, inst->auto_detect);
-        g_host->log(msg);
+    if (inst->render_count == 1 || inst->render_count % 689 == 0) {
+        DLOG("blk=%d in=%.3f out=%.3f det=%d f=%.1f c=%.1f tgt=%d play=%d hold=%d auto=%d",
+             inst->render_count, inst->debug_peak_in, inst->debug_peak_out,
+             inst->has_detection, inst->detection.frequency,
+             inst->detection.cents_offset, inst->target_midi,
+             tones_playing, inst->detection_hold_blocks, inst->auto_detect);
     }
 }
 

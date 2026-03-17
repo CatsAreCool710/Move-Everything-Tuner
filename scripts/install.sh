@@ -7,7 +7,7 @@ ROOT_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 MODULE_ID="tuner"
 DIST_DIR="$ROOT_DIR/dist/$MODULE_ID"
 REMOTE_HOST="${MOVE_HOST:-move.local}"
-REMOTE_USER="${MOVE_USER:-ableton}"
+REMOTE_USER="${MOVE_USER:-root}"
 REMOTE_PATH="/data/UserData/move-anything/modules/tools/$MODULE_ID"
 
 if [ ! -d "$DIST_DIR" ]; then

@@ -4,14 +4,17 @@
         {
             "title": "Overview",
             "lines": [
-                "Chromatic and instrument tuner with",
-                "auditory step guide feedback for",
-                "accessibility.",
+                "Instrument tuner with visual feedback",
+                "and screen reader accessibility.",
                 "",
                 "Detects pitch from mic or line-in.",
                 "Three feedback modes: Step Guide",
                 "(musical intervals), Reference Tone",
                 "(pitch pipe), or Off (silent).",
+                "",
+                "Visual feedback via pad LEDs, step",
+                "button LEDs, and multiple screen",
+                "display modes.",
                 "",
                 "22 instrument presets organized into",
                 "categories, navigable with jog wheel."
@@ -61,7 +64,10 @@
                         "Knob 2: Passthrough volume",
                         "Knob 3: A4 reference frequency",
                         "Knob 4: Noise gate threshold",
-                        "Knob 5: Tune threshold (cents)"
+                        "Knob 5: Tune threshold (cents)",
+                        "Knob 6: Pad display mode",
+                        "Knob 7: Step display mode",
+                        "Knob 8: Screen display mode"
                     ]
                 },
                 {
@@ -89,6 +95,64 @@
                 "Categories:",
                 "  Chromatic, Guitar, 12-String, Bass,",
                 "  Ukulele, Lap Steel, Bowed, Other"
+            ]
+        },
+        {
+            "title": "Visual Feedback",
+            "children": [
+                {
+                    "title": "Pad Display",
+                    "lines": [
+                        "Six pad LED display modes.",
+                        "Set via Knob 6 or Settings menu.",
+                        "",
+                        "Off: No pad LEDs.",
+                        "Meter: Bottom 8 pads as a color-",
+                        "  coded cents meter. Green center,",
+                        "  yellow/orange/red for deviation.",
+                        "Strobe Loop: Middle 16 pads chase",
+                        "  in a ring pattern. Speed and",
+                        "  direction show tuning offset.",
+                        "Strobe Ring: All 32 pads chase",
+                        "  around the perimeter of the grid.",
+                        "Strobe Fill: Middle 16 pads chase",
+                        "  in a serpentine (back and forth).",
+                        "String Map: One column per string.",
+                        "  Press a pad to select that string.",
+                        "  Colors show tuning status."
+                    ]
+                },
+                {
+                    "title": "Step Display",
+                    "lines": [
+                        "Five step button LED display modes.",
+                        "Set via Knob 7 or Settings menu.",
+                        "",
+                        "Off: No step LEDs.",
+                        "Meter: 16-segment cents meter.",
+                        "Strobe: Linear chase across steps.",
+                        "Presets: One step per preset in the",
+                        "  current category. Press to select.",
+                        "Strings: One step per string. Press",
+                        "  to select. Color shows status."
+                    ]
+                },
+                {
+                    "title": "Screen Display",
+                    "lines": [
+                        "Four screen display modes.",
+                        "Set via Knob 8 or Settings menu.",
+                        "",
+                        "Classic: Horizontal bar meter with",
+                        "  needle indicator.",
+                        "Strobe: Vertical bars that drift",
+                        "  when out of tune, freeze when",
+                        "  in tune.",
+                        "Needle: Semi-circular arc with a",
+                        "  swinging needle.",
+                        "Offset: Large centered cents number."
+                    ]
+                }
             ]
         },
         {

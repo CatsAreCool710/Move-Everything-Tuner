@@ -22,6 +22,13 @@
 #include <stdlib.h>
 #include <string.h>
 #include <math.h>
+#include "tuner_debug.h"
+
+/* Note name table (defined here, declared extern in tuner_engine.h) */
+const char *TUNER_NOTE_NAMES[] = {
+    "C", "C#", "D", "D#", "E", "F",
+    "F#", "G", "G#", "A", "A#", "B"
+};
 
 /* -------------------------------------------------------------------------- */
 /* Engine state                                                                */
@@ -100,32 +107,37 @@ static void yin_cumulative_mean(const float *diff, float *cmnd, int half_window)
         if (running_sum < 1e-10f) {
             cmnd[tau] = 1.0f;
         } else {
-            cmnd[tau] = diff[tau] * tau / running_sum;
+            float inv_sum = 1.0f / running_sum;
+            cmnd[tau] = diff[tau] * tau * inv_sum;
         }
     }
 }
 
 /*
  * Step 4: Absolute threshold
- * Find the first tau where cmnd[tau] < threshold, then find the
- * minimum from there until cmnd rises again.
+ * Find dips below threshold, then pick the deepest one (best local estimate).
  */
 static int yin_absolute_threshold(const float *cmnd, int half_window, float threshold) {
-    int tau = 2;  /* Start at lag 2 (avoid trivial lag 0/1) */
+    int tau = 2;
+    int best_tau = -1;
+    float best_val = threshold;
 
-    /* Find first dip below threshold */
     while (tau < half_window) {
         if (cmnd[tau] < threshold) {
             /* Walk to local minimum */
             while (tau + 1 < half_window && cmnd[tau + 1] < cmnd[tau]) {
                 tau++;
             }
-            return tau;
+            /* Best local estimate: keep the deepest dip */
+            if (cmnd[tau] < best_val) {
+                best_val = cmnd[tau];
+                best_tau = tau;
+            }
         }
         tau++;
     }
 
-    return -1;  /* No periodic signal found */
+    return best_tau;
 }
 
 /*
@@ -189,9 +201,17 @@ static void tuner_engine_analyze(tuner_engine_t *e) {
         sum_sq += e->buffer[i] * e->buffer[i];
     }
     e->rms_level = sqrtf(sum_sq / TUNER_YIN_WINDOW);
+    DLOG("yin: rms=%.4f gate=%.4f", e->rms_level, e->noise_gate);
 
     /* Noise gate: signal too quiet */
     if (e->rms_level < e->noise_gate) {
+#ifdef TUNER_DEBUG
+        {
+            static int gate_reject_count = 0;
+            if (++gate_reject_count % 50 == 0)
+                DLOG("yin: gate reject rms=%.4f", e->rms_level);
+        }
+#endif
         e->has_result = 0;
         e->result.frequency  = 0.0f;
         e->result.confidence = 0.0f;
@@ -204,11 +224,13 @@ static void tuner_engine_analyze(tuner_engine_t *e) {
 
     int tau = yin_absolute_threshold(e->cmnd, TUNER_YIN_HALF, TUNER_YIN_THRESHOLD);
     if (tau < 0) {
+        DLOG("yin: no dip below %.2f", TUNER_YIN_THRESHOLD);
         e->has_result = 0;
         e->result.frequency  = 0.0f;
         e->result.confidence = 0.0f;
         return;
     }
+    DLOG("yin: tau=%d cmnd=%.4f", tau, e->cmnd[tau]);
 
     float refined_tau = yin_parabolic_interp(e->cmnd, tau, TUNER_YIN_HALF);
     if (refined_tau <= 0.0f) {
@@ -217,6 +239,7 @@ static void tuner_engine_analyze(tuner_engine_t *e) {
     }
 
     float freq = (float)TUNER_SAMPLE_RATE / refined_tau;
+    DLOG("yin: refine tau=%d->%.3f freq=%.1f", tau, refined_tau, freq);
 
     /* Range check */
     if (freq < TUNER_MIN_FREQ || freq > TUNER_MAX_FREQ) {
@@ -249,6 +272,7 @@ static void tuner_engine_analyze(tuner_engine_t *e) {
     e->result.octave       = octave;
     e->result.cents_offset = cents;
     e->has_result = 1;
+    DLOG("yin: detect freq=%.1f conf=%.3f midi=%d cents=%.1f", freq, conf, midi, cents);
 }
 
 void tuner_engine_feed(tuner_engine_t *engine, const int16_t *stereo_in, int frames) {
@@ -256,9 +280,7 @@ void tuner_engine_feed(tuner_engine_t *engine, const int16_t *stereo_in, int fra
 
     for (int i = 0; i < frames; i++) {
         /* Downmix stereo to mono, normalize to -1..+1 */
-        float left  = stereo_in[i * 2]     / 32768.0f;
-        float right = stereo_in[i * 2 + 1] / 32768.0f;
-        float mono  = (left + right) * 0.5f;
+        float mono = (float)(stereo_in[i * 2] + stereo_in[i * 2 + 1]) * (0.5f / 32768.0f);
 
         engine->buffer[engine->buf_pos++] = mono;
 
@@ -270,6 +292,7 @@ void tuner_engine_feed(tuner_engine_t *engine, const int16_t *stereo_in, int fra
                     engine->buffer + TUNER_YIN_HALF,
                     TUNER_YIN_HALF * sizeof(float));
             engine->buf_pos = TUNER_YIN_HALF;
+            DLOG("yin: shift pos=%d", engine->buf_pos);
         }
     }
 }
